@@ -1,5 +1,7 @@
 #[cfg(any(test, not(target_os = "linux")))]
 mod audio_resampler;
+#[cfg(target_os = "android")]
+mod android_defaults;
 mod keyboard;
 /// cbindgen:ignore
 pub mod platform;
