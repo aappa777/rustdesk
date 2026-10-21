@@ -15,6 +15,7 @@ src/version.rs
 cert.pfx
 *.bak
 *png
+!flutter/assets/jcx_remote_logo.png
 *svg
 *jpg
 sciter.dll

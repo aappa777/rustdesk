@@ -47,10 +47,11 @@ import java.nio.ByteBuffer
 import kotlin.math.max
 import kotlin.math.min
 
-const val DEFAULT_NOTIFY_TITLE = "RustDesk"
-const val DEFAULT_NOTIFY_TEXT = "Service is running"
+const val DEFAULT_NOTIFY_TITLE = "JCX 遠端支援"
+const val DEFAULT_NOTIFY_TEXT = "遠端支援服務正在待命"
 const val DEFAULT_NOTIFY_ID = 1
 const val NOTIFY_ID_OFFSET = 100
+private const val CHAT_NOTIFY_ID = 1000001
 
 const val MIME_TYPE = MediaFormat.MIMETYPE_VIDEO_VP9
 
@@ -62,6 +63,20 @@ const val VIDEO_KEY_BIT_RATE = 1024_000
 const val VIDEO_KEY_FRAME_RATE = 30
 
 class MainService : Service() {
+    private val jcxStatusHandler = Handler(Looper.getMainLooper())
+    private val jcxStatusHeartbeat = object : Runnable {
+        override fun run() {
+            if (!_isReady) return
+            sendBroadcast(Intent("com.jcxpos.REMOTE_SUPPORT_STATUS").apply {
+                setClassName(
+                    "com.jcxtech.jcxpos",
+                    "com.jcxtech.jcxpos.RemoteSupportStatusReceiver"
+                )
+                putExtra("running", true)
+            })
+            jcxStatusHandler.postDelayed(this, 30_000)
+        }
+    }
 
     @Keep
     @RequiresApi(Build.VERSION_CODES.N)
@@ -235,6 +250,8 @@ class MainService : Service() {
     private lateinit var notificationManager: NotificationManager
     private lateinit var notificationChannel: String
     private lateinit var notificationBuilder: NotificationCompat.Builder
+    private lateinit var alertNotificationChannel: String
+    private lateinit var alertNotificationBuilder: NotificationCompat.Builder
 
     override fun onCreate() {
         super.onCreate()
@@ -259,6 +276,16 @@ class MainService : Service() {
     }
 
     override fun onDestroy() {
+        jcxStatusHandler.removeCallbacks(jcxStatusHeartbeat)
+        if (_isReady) {
+            sendBroadcast(Intent("com.jcxpos.REMOTE_SUPPORT_STATUS").apply {
+                setClassName(
+                    "com.jcxtech.jcxpos",
+                    "com.jcxtech.jcxpos.RemoteSupportStatusReceiver"
+                )
+                putExtra("running", false)
+            })
+        }
         checkMediaPermission()
         stopService(Intent(this, FloatingWindowService::class.java))
         super.onDestroy()
@@ -494,6 +521,8 @@ class MainService : Service() {
         mediaProjection = projection
         mediaProjectionCallback = callback
         _isReady = true
+        jcxStatusHandler.removeCallbacks(jcxStatusHeartbeat)
+        jcxStatusHandler.postDelayed(jcxStatusHeartbeat, 30_000)
         checkMediaPermission()
         if (restartCapture) {
             captureRestartPending = false
@@ -815,14 +844,17 @@ class MainService : Service() {
 
     private fun initNotification() {
         notificationManager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        notificationManager.cancelAll()
         notificationChannel = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            val channelId = "RustDesk"
-            val channelName = "RustDesk Service"
+            val channelId = "jcx_remote_support_silent_v2"
+            val channelName = getString(R.string.service_notification_channel_name)
             val channel = NotificationChannel(
                 channelId,
-                channelName, NotificationManager.IMPORTANCE_HIGH
+                channelName, NotificationManager.IMPORTANCE_LOW
             ).apply {
-                description = "RustDesk Service Channel"
+                description = getString(R.string.service_notification_channel_description)
+                setSound(null, null)
+                enableVibration(false)
             }
             channel.lightColor = Color.BLUE
             channel.lockscreenVisibility = Notification.VISIBILITY_PRIVATE
@@ -831,7 +863,24 @@ class MainService : Service() {
         } else {
             ""
         }
+        alertNotificationChannel = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            val channelId = "jcx_remote_alerts_v1"
+            val channel = NotificationChannel(
+                channelId,
+                getString(R.string.remote_alert_channel_name),
+                NotificationManager.IMPORTANCE_HIGH
+            ).apply {
+                description = getString(R.string.remote_alert_channel_description)
+                enableVibration(true)
+                lockscreenVisibility = Notification.VISIBILITY_PRIVATE
+            }
+            notificationManager.createNotificationChannel(channel)
+            channelId
+        } else {
+            ""
+        }
         notificationBuilder = NotificationCompat.Builder(this, notificationChannel)
+        alertNotificationBuilder = NotificationCompat.Builder(this, alertNotificationChannel)
     }
 
     @SuppressLint("UnspecifiedImmutableFlag")
@@ -839,7 +888,7 @@ class MainService : Service() {
         val intent = Intent(this, MainActivity::class.java).apply {
             flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED
             action = Intent.ACTION_MAIN
-            addCategory(Intent.CATEGORY_LAUNCHER)
+            addCategory(Intent.CATEGORY_DEFAULT)
             putExtra("type", type)
         }
         val pendingIntent = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
@@ -850,9 +899,10 @@ class MainService : Service() {
         val notification = notificationBuilder
             .setOngoing(true)
             .setSmallIcon(R.mipmap.ic_stat_logo)
-            .setDefaults(Notification.DEFAULT_ALL)
-            .setAutoCancel(true)
-            .setPriority(NotificationCompat.PRIORITY_DEFAULT)
+            .setDefaults(0)
+            .setSilent(true)
+            .setAutoCancel(false)
+            .setPriority(NotificationCompat.PRIORITY_LOW)
             .setContentTitle(DEFAULT_NOTIFY_TITLE)
             .setContentText(translate(DEFAULT_NOTIFY_TEXT))
             .setOnlyAlertOnce(true)
@@ -925,16 +975,7 @@ class MainService : Service() {
         username: String,
         peerId: String
     ) {
-        val notification = notificationBuilder
-            .setOngoing(false)
-            .setPriority(NotificationCompat.PRIORITY_MAX)
-            .setContentTitle(translate("Do you accept?"))
-            .setContentText("$type:$username-$peerId")
-            // .setStyle(MediaStyle().setShowActionsInCompactView(0, 1))
-            // .addAction(R.drawable.check_blue, "check", genLoginRequestPendingIntent(true))
-            // .addAction(R.drawable.close_red, "close", genLoginRequestPendingIntent(false))
-            .build()
-        notificationManager.notify(getClientNotifyID(clientID), notification)
+        cancelNotification(clientID)
     }
 
     private fun onClientAuthorizedNotification(
@@ -944,13 +985,6 @@ class MainService : Service() {
         peerId: String
     ) {
         cancelNotification(clientID)
-        val notification = notificationBuilder
-            .setOngoing(false)
-            .setPriority(NotificationCompat.PRIORITY_MAX)
-            .setContentTitle("$type ${translate("Established")}")
-            .setContentText("$username - $peerId")
-            .build()
-        notificationManager.notify(getClientNotifyID(clientID), notification)
     }
 
     private fun voiceCallRequestNotification(
@@ -959,13 +993,48 @@ class MainService : Service() {
         username: String,
         peerId: String
     ) {
-        val notification = notificationBuilder
+        val notification = alertNotificationBuilder
             .setOngoing(false)
-            .setPriority(NotificationCompat.PRIORITY_MAX)
-            .setContentTitle(translate("Do you accept?"))
-            .setContentText("$type:$username-$peerId")
+            .setDefaults(Notification.DEFAULT_ALL)
+            .setPriority(NotificationCompat.PRIORITY_HIGH)
+            .setSmallIcon(R.mipmap.ic_stat_logo)
+            .setContentTitle(getString(R.string.remote_voice_call_title))
+            .setContentText(getString(R.string.remote_voice_call_text))
+            .setVisibility(NotificationCompat.VISIBILITY_PRIVATE)
+            .setAutoCancel(true)
+            .setContentIntent(createMainActivityPendingIntent())
             .build()
         notificationManager.notify(getClientNotifyID(clientID), notification)
+    }
+
+    fun showChatMessageNotification() {
+        val notification = alertNotificationBuilder
+            .setOngoing(false)
+            .setDefaults(Notification.DEFAULT_ALL)
+            .setPriority(NotificationCompat.PRIORITY_HIGH)
+            .setSmallIcon(R.mipmap.ic_stat_logo)
+            .setContentTitle(getString(R.string.remote_chat_message_title))
+            .setContentText(getString(R.string.remote_chat_message_text))
+            .setVisibility(NotificationCompat.VISIBILITY_PRIVATE)
+            .setAutoCancel(true)
+            .setContentIntent(createMainActivityPendingIntent())
+            .build()
+        notificationManager.notify(CHAT_NOTIFY_ID, notification)
+    }
+
+    @SuppressLint("UnspecifiedImmutableFlag")
+    private fun createMainActivityPendingIntent(): PendingIntent {
+        val intent = Intent(this, MainActivity::class.java).apply {
+            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED
+            action = Intent.ACTION_MAIN
+            addCategory(Intent.CATEGORY_DEFAULT)
+        }
+        val flags = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            FLAG_UPDATE_CURRENT or FLAG_IMMUTABLE
+        } else {
+            FLAG_UPDATE_CURRENT
+        }
+        return PendingIntent.getActivity(this, 0, intent, flags)
     }
 
     private fun getClientNotifyID(clientID: Int): Int {
@@ -974,6 +1043,7 @@ class MainService : Service() {
 
     fun cancelNotification(clientID: Int) {
         notificationManager.cancel(getClientNotifyID(clientID))
+        notificationManager.cancel(CHAT_NOTIFY_ID)
     }
 
     @SuppressLint("UnspecifiedImmutableFlag")

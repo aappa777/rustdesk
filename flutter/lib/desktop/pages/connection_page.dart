@@ -38,7 +38,8 @@ class _OnlineStatusWidgetState extends State<OnlineStatusWidget> {
   Timer? _updateTimer;
 
   double get em => 14.0;
-  double? get height => bind.isIncomingOnly() ? null : em * 3;
+  double? get height =>
+      (kJcxRemoteSupportMode || bind.isIncomingOnly()) ? null : em * 3;
 
   void onUsePublicServerGuide() {
     const url = "https://rustdesk.com/pricing";
@@ -65,7 +66,7 @@ class _OnlineStatusWidgetState extends State<OnlineStatusWidget> {
 
   @override
   Widget build(BuildContext context) {
-    final isIncomingOnly = bind.isIncomingOnly();
+    final isIncomingOnly = kJcxRemoteSupportMode || bind.isIncomingOnly();
     startServiceWidget() => Offstage(
           offstage: !_svcStopped.value,
           child: InkWell(

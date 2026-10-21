@@ -182,6 +182,20 @@ void runMobileApp() async {
   await Future.wait([gFFI.abModel.loadCache(), gFFI.groupModel.loadCache()]);
   gFFI.userModel.refreshCurrentUser();
   runApp(App());
+  if (isAndroid) {
+    final supportRequest =
+        await gFFI.invokeMethodWithResult<Map<dynamic, dynamic>>(
+            "consume_jcx_remote_start");
+    if (supportRequest?['start'] == true) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (supportRequest?['alreadyRunning'] == true) {
+          gFFI.serverModel.reportJcxSupportReady();
+        } else {
+          gFFI.serverModel.toggleService();
+        }
+      });
+    }
+  }
   await initUniLinks();
 }
 
@@ -497,7 +511,9 @@ class _AppState extends State<App> with WidgetsBindingObserver {
           debugShowCheckedModeBanner: false,
           title: isWeb
               ? '${bind.mainGetAppNameSync()} Web Client V2 (Preview)'
-              : bind.mainGetAppNameSync(),
+              : (kJcxRemoteSupportMode
+                  ? kJcxRemoteSupportName
+                  : bind.mainGetAppNameSync()),
           theme: MyTheme.lightTheme,
           darkTheme: MyTheme.darkTheme,
           themeMode: MyTheme.currentThemeMode(),

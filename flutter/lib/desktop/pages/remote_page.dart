@@ -47,6 +47,7 @@ class RemotePage extends StatefulWidget {
     this.switchUuid,
     this.forceRelay,
     this.isSharedPassword,
+      this.autoVoiceCall = false,
   }) : super(key: key) {
     initSharedStates(id);
   }
@@ -61,6 +62,7 @@ class RemotePage extends StatefulWidget {
   final String? switchUuid;
   final bool? forceRelay;
   final bool? isSharedPassword;
+  final bool autoVoiceCall;
   final SimpleWrapper<State<RemotePage>?> _lastState = SimpleWrapper(null);
   final DesktopTabController? tabController;
 
@@ -90,6 +92,7 @@ class _RemotePageState extends State<RemotePage>
   Timer? _timer;
   String keyboardMode = "legacy";
   bool _isWindowBlur = false;
+  bool _autoVoiceCallRequested = false;
   // Known macOS remote-input trade-offs (kept simple intentionally):
   // 1. Dialogs rely on FocusNode loss plus middleBlocked, not mirrored dialog
   //    state. Reproduce: activate remote input, open a dialog, then type.
@@ -158,6 +161,10 @@ class _RemotePageState extends State<RemotePage>
     }
     Get.put<FFI>(_ffi, tag: widget.id);
     _ffi.imageModel.addCallbackOnFirstImage((String peerId) {
+      if (widget.autoVoiceCall && !_autoVoiceCallRequested) {
+        _autoVoiceCallRequested = true;
+        bind.sessionRequestVoiceCall(sessionId: _ffi.sessionId);
+      }
       _ffi.canvasModel.activateLocalCursor();
       showKBLayoutTypeChooserIfNeeded(
           _ffi.ffiModel.pi.platform, _ffi.dialogManager);

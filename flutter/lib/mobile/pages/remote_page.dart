@@ -73,12 +73,14 @@ class RemotePage extends StatefulWidget {
       required this.id,
       this.password,
       this.isSharedPassword,
+      this.autoVoiceCall = false,
       this.forceRelay})
       : super(key: key);
 
   final String id;
   final String? password;
   final bool? isSharedPassword;
+  final bool autoVoiceCall;
   final bool? forceRelay;
 
   @override
@@ -88,6 +90,7 @@ class RemotePage extends StatefulWidget {
 class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
   Timer? _timer;
   bool _showBar = !isWebDesktop;
+  bool _autoVoiceCallRequested = false;
   bool _showGestureHelp = false;
   String _value = '';
   Orientation? _currentOrientation;
@@ -143,6 +146,10 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
         .changeCurrentKey(MessageKey(widget.id, ChatModel.clientModeID));
     _blockableOverlayState.applyFfi(gFFI);
     gFFI.imageModel.addCallbackOnFirstImage((String peerId) {
+      if (widget.autoVoiceCall && !_autoVoiceCallRequested) {
+        _autoVoiceCallRequested = true;
+        bind.sessionRequestVoiceCall(sessionId: gFFI.sessionId);
+      }
       gFFI.recordingModel
           .updateStatus(bind.sessionGetIsRecording(sessionId: gFFI.sessionId));
       if (gFFI.recordingModel.start) {

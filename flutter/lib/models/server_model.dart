@@ -28,6 +28,8 @@ class ServerModel with ChangeNotifier {
   bool _mediaOk = false;
   bool _inputOk = false;
   bool _audioOk = false;
+  bool _microphonePermissionGranted = false;
+  bool _batteryUnrestricted = false;
   bool _fileOk = false;
   bool _clipboardOk = false;
   bool _showElevation = false;
@@ -59,6 +61,10 @@ class ServerModel with ChangeNotifier {
   bool get inputOk => _inputOk;
 
   bool get audioOk => _audioOk;
+
+  bool get microphonePermissionGranted => _microphonePermissionGranted;
+
+  bool get batteryUnrestricted => _batteryUnrestricted;
 
   bool get fileOk => _fileOk;
 
@@ -200,9 +206,10 @@ class ServerModel with ChangeNotifier {
   /// audio true by default (if permission on) (false default < Android 10)
   /// file true by default (if permission on)
   checkAndroidPermission() async {
+    _microphonePermissionGranted =
+        await AndroidPermissionManager.check(kRecordAudio);
     // audio
-    if (androidVersion < 30 ||
-        !await AndroidPermissionManager.check(kRecordAudio)) {
+    if (androidVersion < 30 || !_microphonePermissionGranted) {
       _audioOk = false;
       bind.mainSetOption(key: kOptionEnableAudio, value: "N");
     } else {
@@ -220,6 +227,42 @@ class ServerModel with ChangeNotifier {
     _clipboardOk = clipOption != 'N';
 
     notifyListeners();
+  }
+
+  Future<void> refreshAndroidSupportStatus() async {
+    if (!isAndroid) return;
+    final micGranted = await AndroidPermissionManager.check(kRecordAudio);
+    final batteryStatus =
+        await parent.target?.invokeMethod("is_ignoring_battery_optimizations");
+    final batteryUnrestricted = batteryStatus == true;
+    if (_microphonePermissionGranted != micGranted ||
+        _batteryUnrestricted != batteryUnrestricted) {
+      _microphonePermissionGranted = micGranted;
+      _batteryUnrestricted = batteryUnrestricted;
+      notifyListeners();
+    }
+    // MainActivity reports the live Accessibility service state on this call.
+    parent.target?.invokeMethod("check_service");
+  }
+
+  Future<void> enableVoiceAutoAccept() async {
+    if (!await AndroidPermissionManager.check(kRecordAudio)) {
+      final granted = await AndroidPermissionManager.request(kRecordAudio);
+      if (!granted) {
+        showToast('需要允許麥克風，客服語音才能自動接聽');
+        return;
+      }
+    }
+    _microphonePermissionGranted = true;
+    _audioOk = true;
+    await bind.mainSetOption(key: kOptionEnableAudio, value: defaultOptionYes);
+    notifyListeners();
+    showToast('語音已就緒；JCX 客服來電將自動接聽');
+  }
+
+  Future<void> requestUnrestrictedBattery() async {
+    if (_batteryUnrestricted) return;
+    await parent.target?.invokeMethod("request_ignore_battery_optimizations");
   }
 
   updatePasswordModel() async {
@@ -403,6 +446,12 @@ class ServerModel with ChangeNotifier {
       if (bind.mainGetLocalOption(key: kOptionDisableFloatingWindow) != 'Y') {
         await checkFloatingWindowPermission();
       }
+      // Android users already see the remote-access disclosure on the branded
+      // service page. Keep OS permission prompts, but avoid a second app modal.
+      if (isAndroid) {
+        await startService();
+        return;
+      }
       final res = await parent.target?.dialogManager
           .show<bool>((setState, close, context) {
         submit() => close(true);
@@ -469,6 +518,9 @@ class ServerModel with ChangeNotifier {
         if (value && !_isStart) {
           startService();
         }
+        if (value && isAndroid) {
+          reportJcxSupportReady();
+        }
         break;
       case "input":
         if (_inputOk != value) {
@@ -482,6 +534,12 @@ class ServerModel with ChangeNotifier {
         return;
     }
     notifyListeners();
+  }
+
+  Future<void> reportJcxSupportReady() async {
+    final id = (await bind.mainGetMyId()).replaceAll(RegExp(r'\D'), '');
+    if (!RegExp(r'^\d{9,10}$').hasMatch(id)) return;
+    await parent.target?.invokeMethod("report_jcx_remote_ready", {"id": id});
   }
 
   // force
@@ -606,7 +664,23 @@ class ServerModel with ChangeNotifier {
     );
   }
 
-  handleVoiceCall(Client client, bool accept) {
+  Future<void> handleVoiceCall(Client client, bool accept) async {
+    if (accept && !await AndroidPermissionManager.check(kRecordAudio)) {
+      final granted = await AndroidPermissionManager.request(kRecordAudio);
+      if (!granted) {
+        parent.target?.invokeMethod("cancel_notification", client.id);
+        bind.cmHandleIncomingVoiceCall(id: client.id, accept: false);
+        showToast('需要允許麥克風才能開始語音通話');
+        return;
+      }
+    }
+    if (accept) {
+      _microphonePermissionGranted = true;
+      _audioOk = true;
+      await bind.mainSetOption(
+          key: kOptionEnableAudio, value: defaultOptionYes);
+      notifyListeners();
+    }
     parent.target?.invokeMethod("cancel_notification", client.id);
     bind.cmHandleIncomingVoiceCall(id: client.id, accept: accept);
   }
@@ -617,13 +691,23 @@ class ServerModel with ChangeNotifier {
       'Voice call',
       'Do you accept?',
       'android_new_voice_call_tip',
-      () => handleVoiceCall(client, false),
-      () => handleVoiceCall(client, true),
+      () {
+        _voiceCallDecisionInProgress.remove(client.id);
+        handleVoiceCall(client, false);
+      },
+      () {
+        _voiceCallDecisionInProgress.remove(client.id);
+        handleVoiceCall(client, true);
+      },
+      showAcceptWhenPasswordMode: true,
     );
   }
 
+  final Set<int> _voiceCallDecisionInProgress = <int>{};
+
   showClientDialog(Client client, String title, String contentTitle,
-      String content, VoidCallback onCancel, VoidCallback onSubmit) {
+      String content, VoidCallback onCancel, VoidCallback onSubmit,
+      {bool showAcceptWhenPasswordMode = false}) {
     parent.target?.dialogManager.show((setState, close, context) {
       cancel() {
         onCancel();
@@ -656,7 +740,7 @@ class ServerModel with ChangeNotifier {
         ),
         actions: [
           dialogButton("Dismiss", onPressed: cancel, isOutline: true),
-          if (approveMode != 'password')
+          if (approveMode != 'password' || showAcceptWhenPasswordMode)
             dialogButton("Accept", onPressed: submit),
         ],
         onSubmit: submit,
@@ -753,13 +837,33 @@ class ServerModel with ChangeNotifier {
         _clients[index].incomingVoiceCall = client.incomingVoiceCall;
         if (client.incomingVoiceCall) {
           if (isAndroid) {
-            showVoiceCallDialog(client);
+            if (_voiceCallDecisionInProgress.add(client.id)) {
+              AndroidPermissionManager.check(kRecordAudio).then((micGranted) {
+                if (!_clients.any((c) =>
+                    c.id == client.id &&
+                    !c.disconnected &&
+                    c.incomingVoiceCall)) {
+                  _voiceCallDecisionInProgress.remove(client.id);
+                  return;
+                }
+                if (micGranted && _audioOk) {
+                  handleVoiceCall(client, true).whenComplete(() {
+                    _voiceCallDecisionInProgress.remove(client.id);
+                  });
+                } else {
+                  showVoiceCallDialog(client);
+                }
+              });
+            }
           } else {
             // Has incoming phone call, let's set the window on top.
             Future.delayed(Duration.zero, () {
               windowOnTop(null);
             });
           }
+        }
+        if (!client.incomingVoiceCall) {
+          _voiceCallDecisionInProgress.remove(client.id);
         }
         notifyListeners();
       }

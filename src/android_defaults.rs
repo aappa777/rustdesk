@@ -1,6 +1,6 @@
 use base::config::keys;
 use hbb_common::{
-    config::{Config, Config2, APP_DIR},
+    config::{Config, Config2, LocalConfig, APP_DIR},
     log,
 };
 use std::sync::Once;
@@ -14,6 +14,12 @@ pub(crate) fn initialize() {
     }
 
     INITIALIZE.call_once(|| {
+        if LocalConfig::get_option(keys::OPTION_DISABLE_FLOATING_WINDOW).is_empty() {
+            LocalConfig::set_option(
+                keys::OPTION_DISABLE_FLOATING_WINDOW.to_owned(),
+                "Y".to_owned(),
+            );
+        }
         // Check before loading Config: loading it can generate and persist an ID.
         if Config::file().exists() || Config2::file().exists() {
             return;

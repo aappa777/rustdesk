@@ -47,6 +47,11 @@ class HomePageState extends State<HomePage> {
 
   void initPages() {
     _pages.clear();
+    _chatPageTabIndex = -1;
+    if (isAndroid) {
+      _pages.add(ServerPage());
+      return;
+    }
     if (!bind.isIncomingOnly()) {
       _pages.add(ConnectionPage(
         appBarActions: [],
@@ -79,34 +84,39 @@ class HomePageState extends State<HomePage> {
             title: appTitle(),
             actions: _pages.elementAt(_selectedIndex).appBarActions,
           ),
-          bottomNavigationBar: BottomNavigationBar(
-            key: navigationBarKey,
-            items: _pages
-                .map((page) =>
-                    BottomNavigationBarItem(icon: page.icon, label: page.title))
-                .toList(),
-            currentIndex: _selectedIndex,
-            type: BottomNavigationBarType.fixed,
-            selectedItemColor: MyTheme.accent, //
-            unselectedItemColor: MyTheme.darkGray,
-            onTap: (index) => setState(() {
-              // close chat overlay when go chat page
-              if (_selectedIndex != index) {
-                _selectedIndex = index;
-                if (isChatPageCurrentTab) {
-                  gFFI.chatModel.hideChatIconOverlay();
-                  gFFI.chatModel.hideChatWindowOverlay();
-                  gFFI.chatModel.mobileClearClientUnread(
-                      gFFI.chatModel.currentKey.connId);
-                }
-              }
-            }),
-          ),
+          bottomNavigationBar: isAndroid
+              ? null
+              : BottomNavigationBar(
+                  key: navigationBarKey,
+                  items: _pages
+                      .map((page) => BottomNavigationBarItem(
+                          icon: page.icon, label: page.title))
+                      .toList(),
+                  currentIndex: _selectedIndex,
+                  type: BottomNavigationBarType.fixed,
+                  selectedItemColor: MyTheme.accent, //
+                  unselectedItemColor: MyTheme.darkGray,
+                  onTap: (index) => setState(() {
+                    // close chat overlay when go chat page
+                    if (_selectedIndex != index) {
+                      _selectedIndex = index;
+                      if (isChatPageCurrentTab) {
+                        gFFI.chatModel.hideChatIconOverlay();
+                        gFFI.chatModel.hideChatWindowOverlay();
+                        gFFI.chatModel.mobileClearClientUnread(
+                            gFFI.chatModel.currentKey.connId);
+                      }
+                    }
+                  }),
+                ),
           body: _pages.elementAt(_selectedIndex),
         ));
   }
 
   Widget appTitle() {
+    if (isAndroid) {
+      return const Text('JCX 遠端支援');
+    }
     final currentUser = gFFI.chatModel.currentUser;
     final currentKey = gFFI.chatModel.currentKey;
     if (isChatPageCurrentTab &&

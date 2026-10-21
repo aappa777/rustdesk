@@ -18,6 +18,7 @@ import android.content.ClipboardManager
 import android.os.Bundle
 import android.os.Build
 import android.os.IBinder
+import android.os.PowerManager
 import android.util.Log
 import android.view.KeyEvent
 import android.view.WindowManager
@@ -29,6 +30,7 @@ import android.media.MediaFormat
 import android.net.Uri
 import android.provider.DocumentsContract
 import android.provider.OpenableColumns
+import android.provider.Settings
 import android.webkit.MimeTypeMap
 import android.util.DisplayMetrics
 import androidx.annotation.RequiresApi
@@ -73,6 +75,8 @@ class MainActivity : FlutterActivity() {
     )
 
     private var pendingPicker: PendingPicker? = null
+    private var pendingJcxSupportStart = false
+    private var jcxSupportFlow = false
 
     private var isAudioStart = false
     private val audioRecordHandle = AudioRecordHandle(this, { false }, { isAudioStart })
@@ -231,14 +235,37 @@ class MainActivity : FlutterActivity() {
         }
         if (requestCode == REQ_INVOKE_PERMISSION_ACTIVITY_MEDIA_PROJECTION && resultCode == RES_FAILED) {
             flutterMethodChannel?.invokeMethod("on_media_projection_canceled", null)
+            if (jcxSupportFlow) {
+                setResult(Activity.RESULT_CANCELED)
+                jcxSupportFlow = false
+                finish()
+            }
         }
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        acceptJcxSupportIntent(intent)
         if (_rdClipboardManager == null) {
             _rdClipboardManager = RdClipboardManager(getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager)
             FFI.setClipboardManager(_rdClipboardManager!!)
+        }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        acceptJcxSupportIntent(intent)
+        if (pendingJcxSupportStart) {
+            pendingJcxSupportStart = false
+            flutterMethodChannel?.invokeMethod("jcx_start_remote_support", null)
+        }
+    }
+
+    private fun acceptJcxSupportIntent(intent: Intent?) {
+        if (intent?.getBooleanExtra("com.jcxpos.START_REMOTE_SUPPORT", false) == true) {
+            jcxSupportFlow = true
+            pendingJcxSupportStart = true
         }
     }
 
@@ -277,6 +304,25 @@ class MainActivity : FlutterActivity() {
         flutterMethodChannel.setMethodCallHandler { call, result ->
             // make sure result will be invoked, otherwise flutter will await forever
             when (call.method) {
+                "consume_jcx_remote_start" -> {
+                    val shouldStart = pendingJcxSupportStart
+                    pendingJcxSupportStart = false
+                    result.success(mapOf("start" to shouldStart, "alreadyRunning" to MainService.isReady))
+                }
+                "report_jcx_remote_ready" -> {
+                    val id = call.argument<String>("id")?.filter(Char::isDigit)
+                    if (id == null || !id.matches(Regex("\\d{9,10}"))) {
+                        result.success(false)
+                    } else {
+                        sendJcxRemoteStatus(true, id)
+                        if (jcxSupportFlow) {
+                            setResult(Activity.RESULT_OK, Intent().putExtra("com.jcxpos.REMOTE_SUPPORT_ID", id))
+                            jcxSupportFlow = false
+                            finish()
+                        }
+                        result.success(true)
+                    }
+                }
                 "init_service" -> {
                     Intent(activity, MainService::class.java).also {
                         bindService(it, serviceConnection, Context.BIND_AUTO_CREATE)
@@ -297,6 +343,7 @@ class MainActivity : FlutterActivity() {
                 }
                 "stop_service" -> {
                     Log.d(logTag, "Stop service")
+                    sendJcxRemoteStatus(false)
                     mainService?.let {
                         it.destroy()
                         result.success(true)
@@ -308,6 +355,26 @@ class MainActivity : FlutterActivity() {
                     if (call.arguments is String) {
                         result.success(XXPermissions.isGranted(context, call.arguments as String))
                     } else {
+                        result.success(false)
+                    }
+                }
+                "is_ignoring_battery_optimizations" -> {
+                    val powerManager = getSystemService(Context.POWER_SERVICE) as PowerManager
+                    result.success(Build.VERSION.SDK_INT < Build.VERSION_CODES.M ||
+                        powerManager.isIgnoringBatteryOptimizations(packageName))
+                }
+                "request_ignore_battery_optimizations" -> {
+                    try {
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                            val intent = Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS).apply {
+                                data = Uri.parse("package:$packageName")
+                            }
+                            startActivity(intent)
+                        }
+                        result.success(true)
+                    } catch (e: Exception) {
+                        Log.e(logTag, "Could not open battery optimization settings", e)
+                        startAction(context, "android.settings.IGNORE_BATTERY_OPTIMIZATION_SETTINGS")
                         result.success(false)
                     }
                 }
@@ -364,6 +431,10 @@ class MainActivity : FlutterActivity() {
                     } else {
                         result.success(true)
                     }
+                }
+                "show_chat_message_notification" -> {
+                    mainService?.showChatMessageNotification()
+                    result.success(mainService != null)
                 }
                 "enable_soft_keyboard" -> {
                     // https://blog.csdn.net/hanye2020/article/details/105553780
@@ -663,6 +734,17 @@ class MainActivity : FlutterActivity() {
                 }
             }
         }
+    }
+
+    private fun sendJcxRemoteStatus(running: Boolean, id: String? = null) {
+        sendBroadcast(Intent("com.jcxpos.REMOTE_SUPPORT_STATUS").apply {
+            setClassName(
+                "com.jcxtech.jcxpos",
+                "com.jcxtech.jcxpos.RemoteSupportStatusReceiver"
+            )
+            putExtra("running", running)
+            id?.let { putExtra("id", it) }
+        })
     }
 
     private fun canonicalAppScopedFile(path: String): File? {

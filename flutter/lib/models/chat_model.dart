@@ -387,13 +387,17 @@ class ChatModel with ChangeNotifier {
     }
 
     final messagekey = MessageKey(peerId, id);
+    final incomingServerMessage = isAndroid && id != clientModeID;
 
-    // mobile: first message show overlay icon
-    if (!isDesktop && chatIconOverlayEntry == null) {
+    // Mobile clients can open the floating chat control. Incoming messages on
+    // the Android support host are shown directly because its branded page has
+    // no chat tab or floating controls.
+    if (!isDesktop && !incomingServerMessage && chatIconOverlayEntry == null) {
       showChatIconOverlay();
     }
-    // show chat page
-    await showChatPage(messagekey);
+    if (!incomingServerMessage) {
+      await showChatPage(messagekey);
+    }
     late final ChatUser chatUser;
     if (id == clientModeID) {
       chatUser = ChatUser(
@@ -457,6 +461,19 @@ class ChatModel with ChangeNotifier {
       mobileClearClientUnread(messagekey.connId);
     }
     latestReceivedKey = messagekey;
+    if (incomingServerMessage) {
+      final isAppForeground =
+          WidgetsBinding.instance.lifecycleState == AppLifecycleState.resumed;
+      changeCurrentKey(messagekey);
+      if (chatWindowOverlayEntry == null) {
+        showChatWindowOverlay(requestSoftKeyboard: false);
+      }
+      if (isAppForeground) {
+        SystemSound.play(SystemSoundType.alert);
+      } else {
+        parent.target?.invokeMethod("show_chat_message_notification");
+      }
+    }
     notifyListeners();
   }
 

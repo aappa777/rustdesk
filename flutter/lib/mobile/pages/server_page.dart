@@ -23,8 +23,9 @@ class ServerPage extends StatefulWidget implements PageShape {
   final icon = const Icon(Icons.mobile_screen_share);
 
   @override
-  final appBarActions = (!bind.isDisableSettings() &&
-          bind.mainGetBuildinOption(key: kOptionHideSecuritySetting) != 'Y')
+  final appBarActions = !isAndroid &&
+          (!bind.isDisableSettings() &&
+              bind.mainGetBuildinOption(key: kOptionHideSecuritySetting) != 'Y')
       ? [_DropDownAction()]
       : [];
 
@@ -179,21 +180,37 @@ class _DropDownAction extends StatelessWidget {
   }
 }
 
-class _ServerPageState extends State<ServerPage> {
+class _ServerPageState extends State<ServerPage> with WidgetsBindingObserver {
   Timer? _updateTimer;
+  Timer? _permissionStatusTimer;
 
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _updateTimer = periodic_immediate(const Duration(seconds: 3), () async {
       await gFFI.serverModel.fetchID();
     });
     gFFI.serverModel.checkAndroidPermission();
+    gFFI.serverModel.refreshAndroidSupportStatus();
+    _permissionStatusTimer = Timer.periodic(const Duration(seconds: 5), (_) {
+      gFFI.serverModel.refreshAndroidSupportStatus();
+    });
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      gFFI.serverModel.checkAndroidPermission();
+      gFFI.serverModel.refreshAndroidSupportStatus();
+    }
   }
 
   @override
   void dispose() {
     _updateTimer?.cancel();
+    _permissionStatusTimer?.cancel();
+    WidgetsBinding.instance.removeObserver(this);
     super.dispose();
   }
 
@@ -208,18 +225,458 @@ class _ServerPageState extends State<ServerPage> {
                   child: Center(
                     child: Column(
                       mainAxisAlignment: MainAxisAlignment.start,
-                      children: [
-                        buildPresetPasswordWarningMobile(),
-                        gFFI.serverModel.isStart
-                            ? ServerInfo()
-                            : ServiceNotRunningNotification(),
-                        const ConnectionManager(),
-                        const PermissionChecker(),
-                        SizedBox.fromSize(size: const Size(0, 15.0)),
-                      ],
+                      children: isAndroid
+                          ? [
+                              _AndroidRemoteSupportCard(
+                                  serverModel: serverModel),
+                              const SizedBox(height: 15),
+                            ]
+                          : [
+                              buildPresetPasswordWarningMobile(),
+                              gFFI.serverModel.isStart
+                                  ? ServerInfo()
+                                  : ServiceNotRunningNotification(),
+                              const ConnectionManager(),
+                              const PermissionChecker(),
+                              SizedBox.fromSize(size: const Size(0, 15.0)),
+                            ],
                     ),
                   ),
                 )));
+  }
+}
+
+class _AndroidRemoteSupportCard extends StatelessWidget {
+  final ServerModel serverModel;
+
+  const _AndroidRemoteSupportCard({required this.serverModel});
+
+  @override
+  Widget build(BuildContext context) {
+    final isRunning = serverModel.isStart;
+    final hideStopService =
+        bind.mainGetBuildinOption(key: kOptionHideStopService) == 'Y';
+    final hasActiveSession =
+        serverModel.clients.any((client) => !client.disconnected);
+    final theme = Theme.of(context);
+    final accent = theme.colorScheme.primary;
+
+    final hero = Container(
+      padding: const EdgeInsets.all(18),
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(24),
+        gradient: LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: [accent, const Color(0xFF123B70)],
+        ),
+        boxShadow: [
+          BoxShadow(
+            color: accent.withOpacity(0.22),
+            blurRadius: 18,
+            offset: const Offset(0, 8),
+          ),
+        ],
+      ),
+      child: Row(
+        children: [
+          Container(
+            width: 68,
+            height: 68,
+            padding: const EdgeInsets.all(5),
+            decoration: BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.circular(18),
+            ),
+            child: ClipRRect(
+              borderRadius: BorderRadius.circular(14),
+              child:
+                  Image.asset('assets/jcx_remote_logo.png', fit: BoxFit.cover),
+            ),
+          ),
+          const SizedBox(width: 14),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text(
+                  'JCX 遠端支援',
+                  style: TextStyle(
+                    color: Colors.white,
+                    fontSize: 21,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+                const SizedBox(height: 5),
+                Text(
+                  '讓 JCX 客服協助您排除設備問題',
+                  style: TextStyle(
+                      color: Colors.white.withOpacity(0.88), fontSize: 13),
+                ),
+                const SizedBox(height: 10),
+                _ServiceStatusPill(
+                  label: !isRunning
+                      ? '尚未啟動'
+                      : hasActiveSession
+                          ? '客服連線中'
+                          : '服務待命中',
+                  color: !isRunning
+                      ? Colors.white
+                      : hasActiveSession
+                          ? const Color(0xFFFFD166)
+                          : const Color(0xFF8BF0B2),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+
+    final serviceCard = Card(
+      elevation: 0,
+      color: theme.colorScheme.surface,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(22),
+        side: BorderSide(color: theme.dividerColor.withOpacity(0.35)),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.all(18),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Row(
+              children: [
+                Icon(isRunning ? Icons.verified_user : Icons.support_agent,
+                    color: isRunning ? Colors.green : accent),
+                const SizedBox(width: 9),
+                Text(
+                  isRunning ? '遠端服務已準備好' : '需要客服協助嗎？',
+                  style: theme.textTheme.titleMedium
+                      ?.copyWith(fontWeight: FontWeight.bold),
+                ),
+              ],
+            ),
+            const SizedBox(height: 8),
+            Text(
+              isRunning
+                  ? '服務已待命。JCX 客服連線時，您可以在此設備上與客服通話或傳送訊息。'
+                  : '請先聯絡 JCX 客服，再啟動遠端支援。首次啟動時，請在 Android 系統視窗按「立即開始」。',
+              style: theme.textTheme.bodyMedium?.copyWith(height: 1.45),
+            ),
+            if (!isRunning || !hideStopService) ...[
+              const SizedBox(height: 16),
+              SizedBox(
+                height: 50,
+                child: FilledButton.icon(
+                  style: FilledButton.styleFrom(
+                    backgroundColor:
+                        isRunning ? const Color(0xFFCC4545) : accent,
+                    shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(14)),
+                  ),
+                  icon: Icon(isRunning ? Icons.stop : Icons.play_arrow),
+                  onPressed: serverModel.toggleService,
+                  label: Text(
+                    isRunning ? '停止遠端服務' : '啟動遠端服務',
+                    style: const TextStyle(
+                        fontSize: 16, fontWeight: FontWeight.w600),
+                  ),
+                ),
+              ),
+            ],
+          ],
+        ),
+      ),
+    );
+
+    final usageCard = Card(
+      elevation: 0,
+      color: theme.colorScheme.surface,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(22),
+        side: BorderSide(color: theme.dividerColor.withOpacity(0.35)),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(18, 16, 18, 8),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text('使用方式',
+                style: theme.textTheme.titleMedium
+                    ?.copyWith(fontWeight: FontWeight.bold)),
+            const SizedBox(height: 12),
+            const _SupportInstructionStep(
+              number: '1',
+              icon: Icons.headset_mic_outlined,
+              title: '先聯絡 JCX 客服',
+              detail: '確認客服正在協助您處理問題。',
+            ),
+            const _SupportInstructionStep(
+              number: '2',
+              icon: Icons.screen_share_outlined,
+              title: '啟動並同意螢幕分享',
+              detail: 'Android 顯示系統視窗時，請按「立即開始」。',
+            ),
+            const _SupportInstructionStep(
+              number: '3',
+              icon: Icons.chat_bubble_outline,
+              title: '語音通話自動接聽',
+              detail: '首次允許麥克風後，客服發起語音時會自動接聽；文字訊息會在此畫面開啟。',
+            ),
+          ],
+        ),
+      ),
+    );
+
+    final preparationCard = Card(
+      elevation: 0,
+      color: theme.colorScheme.surface,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(22),
+        side: BorderSide(color: theme.dividerColor.withOpacity(0.35)),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.all(18),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Text('連線準備',
+                style: theme.textTheme.titleMedium
+                    ?.copyWith(fontWeight: FontWeight.bold)),
+            const SizedBox(height: 8),
+            _AndroidPermissionRow(
+              icon: Icons.accessibility_new,
+              title: '無障礙操作',
+              status: serverModel.inputOk ? '已開啟' : '尚未開啟',
+              enabled: serverModel.inputOk,
+              actionLabel: serverModel.inputOk ? '檢查設定' : '前往設定',
+              onPressed: () => AndroidPermissionManager.startAction(
+                  kActionAccessibilitySettings),
+            ),
+            const Divider(height: 22),
+            _AndroidPermissionRow(
+              icon: Icons.mic,
+              title: '語音與自動接聽',
+              status:
+                  serverModel.microphonePermissionGranted && serverModel.audioOk
+                      ? '已就緒'
+                      : '需首次授權',
+              enabled: serverModel.microphonePermissionGranted &&
+                  serverModel.audioOk,
+              actionLabel:
+                  serverModel.microphonePermissionGranted && serverModel.audioOk
+                      ? '已啟用'
+                      : '啟用語音',
+              onPressed:
+                  serverModel.microphonePermissionGranted && serverModel.audioOk
+                      ? null
+                      : serverModel.enableVoiceAutoAccept,
+            ),
+            const Divider(height: 22),
+            _AndroidPermissionRow(
+              icon: Icons.battery_saver,
+              title: '背景執行（電池）',
+              status: serverModel.batteryUnrestricted ? '不受限制' : '目前有電池限制',
+              enabled: serverModel.batteryUnrestricted,
+              actionLabel: serverModel.batteryUnrestricted ? '已設定' : '設定不受限制',
+              onPressed: serverModel.batteryUnrestricted
+                  ? null
+                  : serverModel.requestUnrestrictedBattery,
+            ),
+            const SizedBox(height: 8),
+            Text(
+              '電池限制不會立即阻止連線，但可能讓 Android 在長時間待機時停止背景服務。',
+              style: theme.textTheme.bodySmall?.copyWith(height: 1.4),
+            ),
+          ],
+        ),
+      ),
+    );
+
+    final serviceNote = Text(
+      '遠端服務啟動時，Android 會保留一則靜音系統通知，讓服務能在背景持續運作。',
+      textAlign: TextAlign.center,
+      style: theme.textTheme.bodySmall?.copyWith(
+        color: theme.colorScheme.onSurfaceVariant,
+        height: 1.4,
+      ),
+    );
+
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 18, 16, 24),
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          final useSideBySideLayout = constraints.maxWidth >= 900;
+          return Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              hero,
+              const SizedBox(height: 14),
+              if (useSideBySideLayout)
+                Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Expanded(
+                      child: Column(
+                        children: [
+                          serviceCard,
+                          const SizedBox(height: 14),
+                          usageCard,
+                        ],
+                      ),
+                    ),
+                    const SizedBox(width: 14),
+                    Expanded(
+                      child: Column(
+                        children: [
+                          preparationCard,
+                          const SizedBox(height: 10),
+                          serviceNote,
+                        ],
+                      ),
+                    ),
+                  ],
+                )
+              else ...[
+                serviceCard,
+                const SizedBox(height: 14),
+                usageCard,
+                const SizedBox(height: 14),
+                preparationCard,
+                const SizedBox(height: 10),
+                serviceNote,
+              ],
+            ],
+          );
+        },
+      ),
+    );
+  }
+}
+
+class _AndroidPermissionRow extends StatelessWidget {
+  final IconData icon;
+  final String title;
+  final String status;
+  final bool enabled;
+  final String actionLabel;
+  final VoidCallback? onPressed;
+
+  const _AndroidPermissionRow({
+    required this.icon,
+    required this.title,
+    required this.status,
+    required this.enabled,
+    required this.actionLabel,
+    required this.onPressed,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final statusColor =
+        enabled ? Colors.green.shade700 : Colors.orange.shade800;
+    return Row(
+      children: [
+        Icon(icon, color: theme.colorScheme.primary),
+        const SizedBox(width: 10),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(title, style: const TextStyle(fontWeight: FontWeight.w600)),
+              Text(status,
+                  style:
+                      theme.textTheme.bodySmall?.copyWith(color: statusColor)),
+            ],
+          ),
+        ),
+        TextButton(onPressed: onPressed, child: Text(actionLabel)),
+      ],
+    );
+  }
+}
+
+class _ServiceStatusPill extends StatelessWidget {
+  final String label;
+  final Color color;
+
+  const _ServiceStatusPill({required this.label, required this.color});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+      decoration: BoxDecoration(
+        color: Colors.black.withOpacity(0.2),
+        borderRadius: BorderRadius.circular(30),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(Icons.circle, size: 8, color: color),
+          const SizedBox(width: 7),
+          Text(label,
+              style: const TextStyle(
+                  color: Colors.white,
+                  fontSize: 12,
+                  fontWeight: FontWeight.w600)),
+        ],
+      ),
+    );
+  }
+}
+
+class _SupportInstructionStep extends StatelessWidget {
+  final String number;
+  final IconData icon;
+  final String title;
+  final String detail;
+
+  const _SupportInstructionStep({
+    required this.number,
+    required this.icon,
+    required this.title,
+    required this.detail,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final color = Theme.of(context).colorScheme.primary;
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 12),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Container(
+            width: 34,
+            height: 34,
+            decoration: BoxDecoration(
+              color: color.withOpacity(0.1),
+              borderRadius: BorderRadius.circular(11),
+            ),
+            child: Icon(icon, size: 19, color: color),
+          ),
+          const SizedBox(width: 11),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text('$number. $title',
+                    style: const TextStyle(fontWeight: FontWeight.w600)),
+                const SizedBox(height: 2),
+                Text(detail,
+                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                          color: Theme.of(context).colorScheme.onSurfaceVariant,
+                          height: 1.35,
+                        )),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
   }
 }
 
@@ -247,15 +704,7 @@ class ServiceNotRunningNotification extends StatelessWidget {
                 .marginOnly(bottom: 8),
             ElevatedButton.icon(
                 icon: const Icon(Icons.play_arrow),
-                onPressed: () {
-                  if (gFFI.userModel.userName.value.isEmpty &&
-                      bind.mainGetLocalOption(key: "show-scam-warning") !=
-                          "N") {
-                    showScamWarning(context, serverModel);
-                  } else {
-                    serverModel.toggleService();
-                  }
-                },
+                onPressed: serverModel.toggleService,
                 label: Text(translate("Start service")))
           ],
         ));
@@ -601,14 +1050,8 @@ class _PermissionCheckerState extends State<PermissionChecker> {
                   .marginOnly(bottom: 8)
               : SizedBox.shrink(),
           if (!hideStopService || !serverModel.mediaOk)
-            PermissionRow(
-                translate("Screen Capture"),
-                serverModel.mediaOk,
-                !serverModel.mediaOk &&
-                        gFFI.userModel.userName.value.isEmpty &&
-                        bind.mainGetLocalOption(key: "show-scam-warning") != "N"
-                    ? () => showScamWarning(context, serverModel)
-                    : serverModel.toggleService),
+            PermissionRow(translate("Screen Capture"), serverModel.mediaOk,
+                serverModel.toggleService),
           PermissionRow(
             translate("Input Control"),
             serverModel.inputOk,
@@ -789,13 +1232,12 @@ class ConnectionManager extends StatelessWidget {
             onPressed: () {
               serverModel.handleVoiceCall(client, false);
             }).marginOnly(right: 15),
-        if (serverModel.approveMode != 'password')
-          ElevatedButton.icon(
-              icon: const Icon(Icons.check),
-              label: Text(translate("Accept")),
-              onPressed: () {
-                serverModel.handleVoiceCall(client, true);
-              }),
+        ElevatedButton.icon(
+            icon: const Icon(Icons.check),
+            label: Text(translate("Accept")),
+            onPressed: () {
+              serverModel.handleVoiceCall(client, true);
+            }),
       ])
     ];
   }
@@ -897,6 +1339,13 @@ void androidChannelInit() {
     debugPrint("flutter got android msg,$method,$arguments");
     try {
       switch (method) {
+        case "jcx_start_remote_support":
+          if (gFFI.serverModel.isStart) {
+            gFFI.serverModel.reportJcxSupportReady();
+          } else {
+            gFFI.serverModel.toggleService();
+          }
+          break;
         case "start_capture":
           {
             gFFI.dialogManager.dismissAll();

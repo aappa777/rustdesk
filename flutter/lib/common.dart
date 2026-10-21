@@ -47,6 +47,10 @@ import 'package:flutter_hbb/native/common.dart'
     if (dart.library.html) 'package:flutter_hbb/web/common.dart';
 import 'package:flutter_hbb/utils/http_service.dart' as http;
 
+const bool kJcxRemoteSupportMode =
+    bool.fromEnvironment('JCX_REMOTE_SUPPORT', defaultValue: false);
+const String kJcxRemoteSupportName = 'JCX 遠端支援';
+
 final globalKey = GlobalKey<NavigatorState>();
 final navigationBarKey = GlobalKey();
 
@@ -2286,6 +2290,7 @@ bool handleUriLink({List<String>? cmdArgs, Uri? uri, String? uriString}) {
   String? password;
   String? switchUuid;
   bool? forceRelay;
+  bool requestVoiceCall = false;
   for (int i = 0; i < args.length; i++) {
     switch (args[i]) {
       case '--connect':
@@ -2336,6 +2341,9 @@ bool handleUriLink({List<String>? cmdArgs, Uri? uri, String? uriString}) {
       case '--relay':
         forceRelay = true;
         break;
+      case '--voice-call':
+        requestVoiceCall = true;
+        break;
       default:
         break;
     }
@@ -2347,7 +2355,8 @@ bool handleUriLink({List<String>? cmdArgs, Uri? uri, String? uriString}) {
           rustDeskWinManager.newRemoteDesktop(id!,
               password: password,
               switchUuid: switchUuid,
-              forceRelay: forceRelay);
+              forceRelay: forceRelay,
+              autoVoiceCall: requestVoiceCall);
         });
         break;
       case UriLinkType.fileTransfer:
@@ -2484,6 +2493,7 @@ List<String>? urlLinkToCmdArgs(Uri uri) {
   if (isMobile && id != null) {
     final forceRelay = queryParameters["relay"] != null;
     final password = queryParameters["password"];
+    final autoVoiceCall = queryParameters["voice_call"] == "1";
 
     // Determine connection type based on command
     if (command == '--file-transfer') {
@@ -2501,7 +2511,10 @@ List<String>? urlLinkToCmdArgs(Uri uri) {
           isTerminal: true, forceRelay: forceRelay, password: password);
     } else {
       // Default to remote desktop for '--connect', '--play', or direct connection
-      connect(Get.context!, id, forceRelay: forceRelay, password: password);
+      connect(Get.context!, id,
+          forceRelay: forceRelay,
+          password: password,
+          autoVoiceCall: autoVoiceCall);
     }
     return null;
   }
@@ -2513,6 +2526,7 @@ List<String>? urlLinkToCmdArgs(Uri uri) {
     var param = queryParameters;
     String? password = param["password"];
     if (password != null) args.addAll(['--password', password]);
+    if (param["voice_call"] == "1") args.add('--voice-call');
     String? switch_uuid = param["switch_uuid"];
     if (switch_uuid != null) args.addAll(['--switch_uuid', switch_uuid]);
     if (param["relay"] != null) args.add("--relay");
@@ -2530,6 +2544,7 @@ connectMainDesktop(String id,
     required bool isRDP,
     bool? forceRelay,
     String? password,
+    bool autoVoiceCall = false,
     String? connToken,
     bool? isSharedPassword}) async {
   if (isFileTransfer) {
@@ -2560,7 +2575,8 @@ connectMainDesktop(String id,
     await rustDeskWinManager.newRemoteDesktop(id,
         password: password,
         isSharedPassword: isSharedPassword,
-        forceRelay: forceRelay);
+        forceRelay: forceRelay,
+        autoVoiceCall: autoVoiceCall);
   }
 }
 
@@ -2577,6 +2593,7 @@ connect(BuildContext context, String id,
     bool isRDP = false,
     bool forceRelay = false,
     String? password,
+    bool autoVoiceCall = false,
     String? connToken,
     bool? isSharedPassword}) async {
   if (id == '') return;
@@ -2609,6 +2626,7 @@ connect(BuildContext context, String id,
         isTcpTunneling: isTcpTunneling,
         isRDP: isRDP,
         password: password,
+        autoVoiceCall: autoVoiceCall,
         isSharedPassword: isSharedPassword,
         forceRelay: forceRelay,
       );
@@ -2621,6 +2639,7 @@ connect(BuildContext context, String id,
         'isTcpTunneling': isTcpTunneling,
         'isRDP': isRDP,
         'password': password,
+        'autoVoiceCall': autoVoiceCall,
         'isSharedPassword': isSharedPassword,
         'forceRelay': forceRelay,
         'connToken': connToken,
@@ -2711,6 +2730,7 @@ connect(BuildContext context, String id,
             builder: (BuildContext context) => RemotePage(
                 id: id,
                 password: password,
+                autoVoiceCall: autoVoiceCall,
                 isSharedPassword: isSharedPassword,
                 forceRelay: forceRelay),
           ),
@@ -3021,7 +3041,8 @@ int versionCmp(String v1, String v2) {
 }
 
 String getWindowName({WindowType? overrideType}) {
-  final name = bind.mainGetAppNameSync();
+  final name =
+      kJcxRemoteSupportMode ? kJcxRemoteSupportName : bind.mainGetAppNameSync();
   switch (overrideType ?? kWindowType) {
     case WindowType.Main:
       return name;

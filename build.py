@@ -118,6 +118,8 @@ def make_parser():
              'Available: [Not used for now]. Special value is "ALL" and empty "". Default is empty.')
     parser.add_argument('--flutter', action='store_true',
                         help='Build flutter package', default=False)
+    parser.add_argument('--jcx-remote-support', action='store_true',
+                        help='Build the simplified JCX-branded Windows customer client')
     parser.add_argument(
         '--hwcodec',
         action='store_true',
@@ -966,23 +968,34 @@ def build_flutter_arch_manjaro(version, features):
     system2('HBB=`pwd`/.. FLUTTER=1 makepkg -f')
 
 
-def build_flutter_windows(version, features, skip_portable_pack):
+def build_flutter_windows(version, features, skip_portable_pack, jcx_remote_support=False):
     if not skip_cargo:
         system2(f'cargo build --locked --features {features} --lib --release')
         if not os.path.exists("target/release/librustdesk.dll"):
             print("cargo build failed, please check rust source code.")
             exit(-1)
     os.chdir('flutter')
-    system2('flutter build windows --release')
+    if jcx_remote_support:
+        previous_jcx_remote_support = os.environ.get('JCX_REMOTE_SUPPORT')
+        os.environ['JCX_REMOTE_SUPPORT'] = '1'
+        try:
+            system2('flutter build windows --release --dart-define=JCX_REMOTE_SUPPORT=true')
+        finally:
+            if previous_jcx_remote_support is None:
+                os.environ.pop('JCX_REMOTE_SUPPORT', None)
+            else:
+                os.environ['JCX_REMOTE_SUPPORT'] = previous_jcx_remote_support
+    else:
+        system2('flutter build windows --release')
     os.chdir('..')
     shutil.copy2('target/release/deps/dylib_virtual_display.dll',
                  flutter_build_dir_2)
     if skip_portable_pack:
         return
     os.chdir('libs/portable')
-    system2('pip3 install -r requirements.txt')
+    system2(f'"{sys.executable}" -m pip install -r requirements.txt')
     system2(
-        f'python3 ./generate.py -f ../../{flutter_build_dir_2} -o . -e ../../{flutter_build_dir_2}/rustdesk.exe')
+        f'"{sys.executable}" ./generate.py -f ../../{flutter_build_dir_2} -o . -e ../../{flutter_build_dir_2}/rustdesk.exe')
     os.chdir('../..')
     if os.path.exists('./rustdesk_portable.exe'):
         os.replace('./target/release/rustdesk-portable-packer.exe',
@@ -1041,7 +1054,8 @@ def main():
         os.chdir('../../..')
 
         if flutter:
-            build_flutter_windows(version, features, args.skip_portable_pack)
+            build_flutter_windows(version, features, args.skip_portable_pack,
+                                  args.jcx_remote_support)
             return
         system2('cargo build --locked --release --features ' + features)
         # system2('upx.exe target/release/rustdesk.exe')

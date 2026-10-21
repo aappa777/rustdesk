@@ -88,6 +88,11 @@ int APIENTRY wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE prev,
       app_name = std::wstring(app_name_buffer);
     }
   }
+#ifdef JCX_REMOTE_SUPPORT
+  // Keep the native single-instance window lookup in sync with Flutter's
+  // branded title while leaving RustDesk's internal service identity intact.
+  app_name = L"JCX \u9060\u7aef\u652f\u63f4";
+#endif
 
   // Uri links dispatch
   HWND hwnd = ::FindWindowW(getWindowClassName(), app_name.c_str());

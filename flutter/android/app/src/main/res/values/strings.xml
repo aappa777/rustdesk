@@ -1,5 +1,14 @@
 <resources>
-    <string name="app_name">RustDesk</string>
-    <string name="accessibility_service_description">Allow other devices to control your phone using virtual touch, when RustDesk screen sharing is established</string>
-    <string name="foreground_service_special_use_subtype">Keeps the RustDesk remote desktop host available for authorized unattended connections and foreground notifications without starting screen capture before user approval.</string>
+    <string name="app_name">JCX 遠端支援</string>
+    <string name="accessibility_service_label">JCX 遠端支援輸入</string>
+    <string name="accessibility_service_description">允許客服在您授權螢幕分享後，透過虛擬觸控協助操作此設備。</string>
+    <string name="service_notification_channel_name">JCX 遠端支援</string>
+    <string name="service_notification_channel_description">靜音顯示遠端支援服務正在背景待命。</string>
+    <string name="remote_alert_channel_name">JCX 語音與訊息提醒</string>
+    <string name="remote_alert_channel_description">提醒客戶接受 JCX 客服語音通話或查看文字訊息。</string>
+    <string name="remote_voice_call_title">JCX 客服請求語音通話</string>
+    <string name="remote_voice_call_text">點選開啟 JCX 遠端支援並接受通話。</string>
+    <string name="remote_chat_message_title">收到 JCX 客服訊息</string>
+    <string name="remote_chat_message_text">點選開啟 JCX 遠端支援查看訊息。</string>
+    <string name="foreground_service_special_use_subtype">Keeps JCX Remote Support available for authorized unattended connections with a visible foreground notification.</string>
 </resources>
